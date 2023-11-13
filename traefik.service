@@ -1,0 +1,18 @@
+[Unit]
+Description=Traefik load balancer and HTTP/HTTPS reverse proxy
+Requires=docker.service
+After=docker.service network.target
+
+[Service]
+Restart=unless-stopped
+
+WorkingDirectory=/home/pi/projects/traefik/
+
+# Compose up (create everything needed, inc. volumes and networks, etc)
+ExecStart=/usr/bin/env docker-compose up --build
+
+# Compose stop, remove containers (but not volumes, networks, etc)
+ExecStop=/usr/bin/env docker-compose stop -v
+
+[Install]
+WantedBy=multi-user.target

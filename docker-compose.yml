@@ -1,19 +1,125 @@
 ---
-version: '3.7'
-networks:
-  default:
-    name: traefik-public
+version: '3.3'
 
 services:
+
   traefik:
-    image: traefik:v2.9.1
+    # Use the latest v2.2.x Traefik image available
+    image: traefik
     ports:
-      - 80:80
-      - 8080:8080
-    volumes:
-      - ./traefik.yml:/etc/traefik/traefik.yml
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Listen on port 80, default for HTTP, necessary to redirect to HTTPS
+      - target: 80
+        published: 80
+        mode: host
+      # Listen on port 443, default for HTTPS
+      - target: 443
+        published: 443
+        mode: host
+      # Listen on port 222, used for SSH traffic intended for gitea
+      - target: 222
+        published: 222
+        mode: host
+      # Listen on port 222, used for SSH traffic intended for gitea
+      - target: 8080
+        published: 8080
+        mode: host
     security_opt:
       - seccomp:unconfined
+    labels:
+      # Enable Traefik for this service, to make it available in the public network
+      - traefik.enable=true
+      # Use the traefik-public network (declared below)
+      - traefik.docker.network=traefik-public
+
+      - traefik.http.routers.traefik-public-http.rule=Path(`/test`)
+      - traefik.http.routers.traefik-public-http.entrypoints=http
+
+      # Use the special Traefik service api@internal with the web UI/Dashboard
+      - traefik.http.routers.traefik-public-http.service=ping@internal
+
+      # Define the port inside of the Docker service to use
+      #- traefik.http.services.traefik-public.loadbalancer.server.port=8080
+    volumes:
+      # Add Docker as a mounted volume, so that Traefik can read the labels of other services
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      # Enable Docker in Traefik, so that it reads labels from Docker services
+      - --providers.docker
+      # Do not expose all Docker services, only the ones explicitly exposed
+      - --providers.docker.exposedbydefault=false
+      # Watch docker events, to respond quicker (at the expensive of more CPU)
+      - --providers.docker.watch=true
+      # Create an entrypoint "http" listening on port 80
+      - --entrypoints.http.address=:80
+      # Create an entrypoint "https" listening on port 443
+      - --entrypoints.https.address=:443
+      # Create an entrypoint "ssh" listening on port 222
+      - --entrypoints.ssh.address=:222
+      # Create an entrypoint "ssh" listening on port 222
+      - --entrypoints.traefik.address=:8080
+      # Enable the access log, with HTTP requests
+      - --accesslog
+      # Enable the Traefik log, for configurations and errors
+      - --log
+      - --log.level=debug
+      # Enable the Dashboard and API
+      - --api=true
+      - --api.dashboard=true
+      - --api.insecure=true   # WebUI listens on :8080 (no need for setting up a router)
+      - --api.debug=true
+      # Enable /ping endpoint
+      - --ping=true
+      # Enable metrics (requires Prometheus to fetch them regularly)
+      - --metrics.prometheus=true
+      - --metrics.prometheus.addrouterslabels=true
+    networks:
+      # Use the public network created to be shared between Traefik and
+      # any other service that needs to be publicly available with HTTPS
+      - traefik-public
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics
+    volumes:
+      - victoriametrics:/victoria-metrics-data
+      - ./victoriametrics_prometheus.yml:/victoriametrics_prometheus.yml
+    networks:
+      - traefik-public
+    ports:
+      - 8428:8428
+    command:
+      - -promscrape.config=/victoriametrics_prometheus.yml
+
+#  whoami:
+#      # A container that exposes an API to show its IP address
+#      image: jmalloc/echo-server
+#      networks:
+#        - traefik-public
+#      deploy:
+#          labels:
+#            # Enable Traefik for this service, specifically the Traefik
+#            # instance which handles public connection (i.e. originating
+#            # outside the swarm)
+#            - traefik.enable=true
+#            - traefik.constraint-label=traefik-public
+#            # HTTP -> HTTPS redirection
+#            - traefik.http.routers.whoami-http.rule=Path(`/whoami`)
+#            - traefik.http.routers.whoami-http.entrypoints=http
+#            # How Traefik can contact our service (i.e. TCP port)
+#            # Note that this uses plain HTTP (i.e. no TLS: Traefik uses
+#            # edge-termination)
+#            - traefik.http.services.whoami-server.loadbalancer.server.port=8080
+
+networks:
+  # Use the previously created public network "traefik-public", shared with other
+  # services that need to be publicly available via this Traefik
+  traefik-public:
+    external: true
+
+volumes:
+  # Create a volume to store the certificates, there is a constraint to make sure
+  # Traefik is always deployed to the same Docker node with the same volume containing
+  # the HTTPS certificates
+  traefik-public-certificates: {}
+  victoriametrics: {}  # Auto-allocate, use `docker volume ls` to view them
 
 # vim: set sw=2 et:
